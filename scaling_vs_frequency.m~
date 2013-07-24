@@ -1,0 +1,23 @@
+% analyze scaling factor versus frequency
+
+clear all; clc;
+
+[~,sf1,sf2,sf3] = textread('/home/harishan/databases/WSJ/pcwise125_sg1sg2f3_train.txt','%s %f %f %f');
+[~,sg1,sg2,sg3,f3] = textread('/home/harishan/databases/WSJ/sgrs_train.txt','%s %f %f %f %f');
+
+sg1r = 600.5; sg2r = 1419; f3r = 2614;
+sg1t = sf1(1)*sg1(1);
+sg2t = sf2(1)*sg2(1);
+f3t = sf3(1)*f3(1);
+
+m1 = sg1r/sg1t;
+m2 = (sg2r - sg1r)/(sg2t - sg1t);
+m3 = (f3r - sg2r)/(f3t - sg2t);
+m4 = (4000 - f3r)/(4000 - f3t);
+
+f = 0:10:4000;
+fband1 = f(f < sg1r);
+fband2 = f(f >= sg1r & f < sg2r);
+fband3 = f(f >= sg2r & f < f3r);
+fband4 = f(f >= f3r);
+fhat1 = 

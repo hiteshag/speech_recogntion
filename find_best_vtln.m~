@@ -1,0 +1,46 @@
+function alpha_best = find_best_vtln(rawdata,Fs,TrWSJDir,TrCOMDir,DDir,Fc,mode)
+
+%---first-pass transcription---%
+
+mfcfile = [DDir '/TEMP/temp.mfc'];
+mfccs = MFCC_fblinwarp(rawdata,Fs,1,Fc,1);
+writehtk(mfcfile,mfccs,0.01,9);
+
+fid = fopen([DDir '/TEMP/temp.scp'],'w');
+fprintf(fid,'%s\n',mfcfile);
+fclose(fid);
+
+shellstr = ['HVite -A -T 1 -t 250.0 -C ' TrCOMDir '/configcross -H ' TrWSJDir '/hmm42_' mode '/macros -H ' TrWSJDir '/hmm42_' mode '/hmmdefs -S ' DDir '/TEMP/temp.scp -i ' DDir '/TEMP/temp_rec.mlf -w ' TrWSJDir '/wdnet_bigram -o ST -y lab -p -8.0 -s 15.0 ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/temp.log'];
+system(shellstr);
+
+%---finding the best alpha---%
+
+wfs = (0.8:0.02:1.2)';
+lhds = zeros(length(wfs),1);
+for k = 1:length(wfs)
+    mfccs = MFCC_fblinwarp(rawdata,Fs,wfs(k),Fc,1);
+    writehtk(mfcfile,mfccs,0.01,9);
+    shellstr = ['HVite -C ' TrCOMDir '/configcross -a -m -o WT -I ' DDir '/TEMP/temp_rec.mlf -H ' TrWSJDir '/hmm42_' mode '/macros -H ' TrWSJDir '/hmm42_/hmmdefs -S ' DDir '/TEMP/temp.scp -i ' DDir '/TEMP/aligned_temp.mlf ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/align.log'];
+    system(shellstr);
+    
+    sfid = fopen([DDir '/TEMP/aligned_temp.mlf'],'r');
+    tfid = fopen([DDir '/TEMP/scores.txt'],'w');
+    line = fgets(sfid);
+    while(ischar(line))
+        if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+            line = fgets(sfid);
+        else
+            fprintf(tfid,'%s',line);
+            line = fgets(sfid);
+        end
+    end
+    fclose(sfid); fclose(tfid);
+    
+    [~,lh] = textread([DDir '/TEMP/scores.txt'],'%s %f');
+    lhds(k) = sum(lh);
+end
+
+alpha_best = wfs(lhds == max(lhds));
+
+end
+

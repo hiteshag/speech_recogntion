@@ -1,0 +1,68 @@
+function [Sg1Est,Sg2Est,Sg3Est] = estimate_SGRs(MicName)
+
+Fs = 7000;
+[rawdata,FsO,nbits] = wavread(MicName);
+rawdata = resample(rawdata,Fs/1000,FsO/1000);
+wavwrite(rawdata,Fs,nbits,'temp.wav');
+
+tclfile = 'tclscript_formants_pitch.tcl';
+fmntfile = 'formants_snack.frm';
+f0file = 'pitch_snack.f0';
+winlen_fmnt = 0.030; winshift = 0.005; wintype = 'Hamming'; numform = 3; lpctype = 0; preem = 0.97; lpcord = 10;
+method = 'ESPS'; winlen_f0 = 0.030; maxpitch = 400; minpitch = 60;
+fid = fopen(tclfile,'w');
+fprintf(fid,'#!/bin/sh\n');
+fprintf(fid,'# the next line restarts with wish \\\n');
+fprintf(fid,'exec wish8.4 "$0" "$@"\n\n');
+fprintf(fid,'package require snack\n\n');
+fprintf(fid,'snack::sound s\n\n');
+fprintf(fid,'s read %s\n\n','temp.wav');
+fprintf(fid,'set fd [open %s w]\n',fmntfile);
+fprintf(fid,'set fd1 [open %s w]\n',f0file);
+fprintf(fid,'puts $fd [join [s formant -windowlength %f -framelength %f -windowtype %s -numformants %d -lpctype %d -lpcorder %d -preemphasisfactor %f -ds_freq %d] \\n]\n',winlen_fmnt,winshift,wintype,numform,lpctype,lpcord,preem,Fs);
+fprintf(fid,'puts $fd1 [join [s pitch -method %s -framelength %f -windowlength %f -maxpitch %d -minpitch %d] \\n]\n',method,winshift,winlen_f0,maxpitch,minpitch);
+fprintf(fid,'close $fd\n\n');
+fprintf(fid,'close $fd1\n\n');
+fprintf(fid,'exit');
+fclose(fid);
+if(system(['wish ' tclfile]) == 0)    
+    [f1 f2 f3 b1 b2 b3] = textread(fmntfile,'%f %f %f %f %f %f');
+    [f0contour pvoice lrms ncorr] = textread(f0file,'%f %f %f %f');
+    system(['rm ' fmntfile]); system(['rm ' f0file]); system(['rm ' tclfile]);
+    system('rm temp.wav');
+else    
+    error('An error has occured!\n');    
+end
+
+offset = (winlen_fmnt/2)/winshift;
+f0C = f0contour(offset+1:end);
+Vd = pvoice(offset+1:end);
+f1C = f1(1:length(f0C));
+f2C = f2(1:length(f0C));
+f3C = f3(1:length(f0C));
+
+f0V = f0C(Vd == 1);
+f0med = median(f0V);
+f0V((f0V >= 0.75*(f0med/2) & f0V <= 1.25*(f0med/2)) | (f0V >= 0.75*(2*f0med) & f0V <= 1.25*(2*f0med))) = f0med;
+f1V = f1C(Vd == 1);
+f2V = f2C(Vd == 1);
+f3V = f3C(Vd == 1);
+
+f0E = f0V; f1E = f1V; f2E = f2V; f3E = f3V; 
+
+F3F1 = frq2bark(f3E)-frq2bark(f1E);
+Eq = load('/home/harishan/SGR_estimation/matfiles/eqn_F31_cubic_F3_F0.mat');
+EstFeat = [F3F1.^3 F3F1.^2 F3F1 f3E f0E ones(length(f0E),1)];
+F1S1 = EstFeat*Eq.b;
+Sg1Est = mean(bark2frq(frq2bark(f1E)-F1S1));
+
+F3F2 = frq2bark(f3E)-frq2bark(f2E);
+Eq = load('/home/harishan/SGR_estimation/matfiles/eqn_F32_cubic_F3_F0.mat');
+EstFeat = [F3F2.^3 F3F2.^2 F3F2 f3E f0E ones(length(f0E),1)];
+F2S2 = EstFeat*Eq.b;
+Sg2Est = mean(bark2frq(frq2bark(f2E)-F2S2));
+
+Eq = load('/home/harishan/SGR_estimation/matfiles/eqn_sg2_sg3.mat');
+Sg3Est = [Sg2Est 1]*Eq.b;
+
+end

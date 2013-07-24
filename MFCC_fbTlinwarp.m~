@@ -1,0 +1,176 @@
+function [feature,fb] = MFCC_fbTlinwarp(rawdata,Fs,alpha,Fc,do_cms)
+
+winlen      = 25;             % window length in ms           
+winshft     = 10;             % window shift in ms
+cepnum      = 12;             % order of cepstral coefficients used (C0 - Ccepnum)
+liftercoe   = 22;             % liftering coefficient
+numchan     = 26;             % number of filters in the Mel filter bank
+preemcoeff  = 0.97;           % coefficient for pre-emphasis
+deltawindow = 2;              % window length to calculate 1st derivative
+accwindow   = 2;              % window length to calculate 2nd derivative
+C0          = 1;              % to use zeroth cepstral coefficient or not 
+
+input = rawdata;
+fsamp = Fs;
+winlen = round(winlen * 10^(-3) * fsamp);
+winshft = winshft * 10^(-3) * fsamp;
+if isempty(whos('FrameNo'))
+    FrameNo = ceil((length(input) - winlen) / winshft);
+end
+nfft = 2*(2^nextpow2(winlen)); % FFT size
+
+% lifter weights
+lifter = (1 + (liftercoe/2)*sin((pi/liftercoe)*(0:cepnum)) );
+
+% pre-emphasis
+a = [1 0];  % denominator polynomial
+b = [1 -preemcoeff];    % numerator   polynomial
+preem = filter(b, a, input);
+
+% converting signal to frames
+frmwin = sig2fm(preem, winlen, winshft, FrameNo);      
+[winlen, framenum] = size(frmwin); % each column is a frame
+
+% Hamming window each frame
+frmwin = frmwin .* (hamming(winlen) * ones(1, framenum));
+
+% FFT
+ffto = abs(fft(frmwin,nfft));
+
+% Log energy
+LE = log(sum(frmwin.*frmwin));
+
+% get Mel FB center frequencies
+mel0 = 0;                  
+mel1 = lin2mel(fsamp/2); 
+melmid = ((1:numchan)/(numchan+1))*(mel1-mel0) + mel0;
+linmid = mel2lin(melmid);
+
+% create FB with alpha = 1
+fbank = get_fbank(numchan,fsamp,nfft,1,Fc,linmid);
+
+% MEL filtering 
+fb = fbank*ffto(1 : (nfft/2), :);
+
+% take logarithm of MEL filter output
+fbfloor = mean(mean(fb)) * 0.00001;  
+logfb = log(max(fb, fbfloor*rand(size(fb))));
+
+% Band-limited interpolation of the log filter-bank output
+T = get_BImat_vtln(alpha,Fc,Fs,numchan);
+logfb = T*logfb;
+
+% take DCT
+mfcco = dct(logfb);
+if C0
+    mfcco = mfcco(1 : cepnum + 1, :);
+else
+    mfcco = [LE;mfcco(2 : cepnum + 1, :)];
+    %lifter = lifter(2 : end);
+end
+
+% do liftering with a lifted sin wave
+mfcco = mfcco .* (lifter' * ones(1, framenum));
+
+% do CMS
+if(do_cms == 1)
+    mfcco = mfcco - mean(mfcco,2)*ones(1,framenum);
+end
+
+% calculate 1st derivative (velocity)
+dt1 = deltacc(mfcco, deltawindow);
+
+% calculate 2nd derivative (acceleration)
+dt2 = deltacc(dt1, accwindow);
+
+% append dt1 and dt2 to mfcco
+mfcco = [mfcco; dt1; dt2];
+
+feature = mfcco';
+
+
+% function definitions
+
+function mels = lin2mel(freq)
+% change frequency from Hz to mel
+mels = 1127 * log( 1 + (freq/700) );
+
+% ---------------------------------------------------------------
+
+function linf = mel2lin(melf)
+% convert from mel to Hz
+linf = (exp(melf/1127)-1)*700;
+
+% ---------------------------------------------------------------
+
+function fbank = get_fbank(numchan,fsamp,nfft,alpha,Fc,midfO)
+
+Fn = fsamp/2;
+Mn = lin2mel(Fn);
+
+if(alpha == 1)
+    midf = midfO;    
+elseif(alpha < 1)
+    midf = [midfO(midfO < alpha*Fc)/alpha ((Fn-Fc)/(Fn-alpha*Fc))*(midfO(midfO >= alpha*Fc) - alpha*Fc)+Fc];
+else
+    midf = [midfO(midfO < Fc)/alpha ((Fn-Fc/alpha)/(Fn-Fc))*(midfO(midfO >= Fc) - Fc)+Fc/alpha];
+end
+midm = lin2mel(midf);
+
+discf = (0:nfft/2-1)*fsamp/nfft;
+discm = lin2mel(discf);
+
+fbank = zeros(numchan,nfft/2);
+for k = 1:numchan
+    if(k == 1)
+        ml = 0; mh = midm(k+1);
+    elseif(k == numchan)
+        ml = midm(k-1); mh = Mn;
+    else
+        ml = midm(k-1); mh = midm(k+1);
+    end
+    idcsl = discm >= ml & discm < midm(k);
+    idcsh = discm >= midm(k) & discm <= mh;
+    fbank(k,idcsl) = (discm(idcsl) - ml)/(midm(k) - ml);
+    fbank(k,idcsh) = (mh - discm(idcsh))/(mh - midm(k));    
+end
+
+% ---------------------------------------------------------------
+
+function wins = sig2fm(input, winlen, winshft, frameno)
+
+input = input(:);     
+wins=zeros(winlen, frameno);
+
+for i = 1 : frameno
+    b = round((i-1) * winshft);
+    c = min(winlen, length(input) - b);
+    wins(1:c,i) = input(b+1 : min(length(input), b+winlen));
+end
+
+% ---------------------------------------------------------------
+
+function dt = deltacc(input, winlen)
+% calculates derivatives of a matrix, whose columns are feature vectors
+
+tmp = 0;
+for cnt = 1 : winlen
+    tmp = tmp + cnt*cnt;
+end
+nrm = 1 / (2*tmp);
+
+dt   = zeros(size(input));
+cols = size(input,2);
+for col = 1 : cols
+    for cnt = 1 : winlen
+        inx1 = col - cnt; inx2 = col + cnt;
+        if(inx1 < 1)
+            inx1 = 1;     
+        end
+        if(inx2 > cols)  
+            inx2 = cols;
+        end
+        dt(:, col) = dt(:, col) + (input(:, inx2) - input(:, inx1)) * cnt;
+    end
+end
+dt = dt * nrm;

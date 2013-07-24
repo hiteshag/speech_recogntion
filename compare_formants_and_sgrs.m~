@@ -1,0 +1,35 @@
+function [] = compare_formants_and_sgrs()
+
+% checking to see if the ML-corrected SGRs are different from the medians
+% of formant frequencies
+
+wavFileList = '/home/harishan/databases/WSJ/nov92_wav1_files_330.txt';
+sgrsFile = '/home/harishan/databases/WSJ/sgrs_nov92_330.txt';
+sfsFile = '/home/harishan/databases/WSJ/pcwise125_sg1sg2sg3.txt';
+
+Id = ['440';'441';'442';'443';'444';'445';'446';'447'];
+fileNames = textread(wavFileList,'%s');
+[~,SG1,SG2,SG3,F3] = textread(sgrsFile,'%s %f %f %f %f');
+[~,SFS1,SFS2,SFS3] = textread(sfsFile,'%s %f %f %f');
+
+dataMat = zeros(size(Id,1),4);
+count = 1;
+for k = 1:size(Id,1)
+    F1 = []; F2 = []; Sg1 = []; Sg2 = [];
+    for j = 1:length(fileNames)
+        if(strfind(fileNames{j},['/' Id(k,:) '/']))
+            [f1,f2] = estimate_SGRs(fileNames{j});
+            F1 = [F1;f1]; F2 = [F2;f2];
+            Sg1 = [Sg1;SG1(j)*SFS1(j)];
+            Sg2 = [Sg2;SG2(j)*SFS2(j)];
+        end
+    end
+    dataMat(count,1) = median(F1);
+    dataMat(count,2) = median(Sg1);
+    dataMat(count,3) = median(F2);
+    dataMat(count,4) = median(Sg2);
+    count = count + 1;
+end
+
+end
+

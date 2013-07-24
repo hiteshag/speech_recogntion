@@ -1,0 +1,114 @@
+function [wfs_best] = find_best_wfsbw(srcfile,sg1ref,sg2ref,f3ref,sg1te,sg2te,f3te,beta)
+
+%---first-pass transcription---%
+
+mfcfile = '/home/harishan/databases/WSJ/TEMP/temp.mfc';
+[rawdata,Fs] = wavread(srcfile);
+mfccs = MFCC(rawdata,Fs);
+writehtk(mfcfile,mfccs,0.01,9);
+
+fid = fopen('/home/harishan/databases/WSJ/TEMP/temp.scp','w');
+fprintf(fid,'%s\n',mfcfile);
+fclose(fid);
+
+shellstr = 'HVite -A -T 1 -t 250.0 -C $TRAIN_COMMON/configcross -H $TRAIN_WSJ0/hmm42/macros -H $TRAIN_WSJ0/hmm42/hmmdefs -S $WSJ0_DIR/TEMP/temp.scp -i $WSJ0_DIR/TEMP/temp_rec.mlf -w $TRAIN_WSJ0/wdnet_bigram -o ST -y lab -p -8.0 -s 15.0 $TRAIN_WSJ0/dict_5k $TRAIN_WSJ0/tiedlist > $WSJ0_DIR/TEMP/temp.log';
+system(shellstr);
+
+%---find the best set of warp factors---%
+
+k = 1;
+for a1 = [0.85 0.875 0.9 0.925 0.95 0.975 1 1.025 1.05 1.075 1.1 1.125 1.15]
+    for a2 = [0.85 0.875 0.9 0.925 0.95 0.975 1 1.025 1.05 1.075 1.1 1.125 1.15]
+        for a3 = [0.85 0.875 0.9 0.925 0.95 0.975 1 1.025 1.05 1.075 1.1 1.125 1.15]            
+            W(1,k) = sg1ref/(a1*sg1te);
+            W(2,k) = sg2ref/(a2*sg2te);
+            W(3,k) = f3ref/(a3*f3te);
+            k = k+1;
+        end
+    end
+end
+ 
+% cls = zeros(1,size(W,2));
+% for k = 1:size(W,2)
+%     if((W(1,k) < 1 && W(2,k) < 1 && W(3,k) < 1) || (W(1,k) > 1 && W(2,k) > 1 && W(3,k) > 1) || (W(1,k) == W(2,k) && W(2,k) == W(3,k)))
+%        cls(k) = 1;
+%     end
+% end
+% W = W(:,cls == 1);
+
+cls = zeros(1,size(W,2));
+for k = 1:size(W,2)
+    cnd1 = W(3,k) > 1 && W(2,k) >= W(3,k) && W(1,k) >= W(2,k);
+    cnd2 = W(3,k) < 1 && W(2,k) <= W(3,k) && W(1,k) <= W(2,k);
+    cnd3 = W(3,k) == 1 && W(2,k) >= W(3,k) && W(1,k) >= W(2,k);
+    cnd4 = W(3,k) == 1 && W(2,k) <= W(3,k) && W(1,k) <= W(2,k);
+    if(cnd1 || cnd2 || cnd3 || cnd4)
+        cls(k) = 1;
+    end
+end
+W = W(:,cls == 1);
+
+% formant tracking
+
+winlen = 25; winshft = 10; % same as MFCC feature extraction
+[F1,F2,F3] = get_formants(srcfile,
+
+lhds = zeros(size(W,2),1);
+for k = 1:length(lhds)
+    mfccs = MFCC_bwlinwarp(srcfile,W(1,k),W(2,k),W(3,k),beta);
+    writehtk(mfcfile,mfccs,0.01,9);
+    shellstr = 'HVite -C $TRAIN_COMMON/configcross -a -m -o WT -I $WSJ0_DIR/TEMP/temp_rec.mlf -H $TRAIN_WSJ0/hmm42/macros -H $TRAIN_WSJ0/hmm42/hmmdefs -S $WSJ0_DIR/TEMP/temp.scp -i $WSJ0_DIR/TEMP/aligned_temp.mlf $TRAIN_WSJ0/dict_5k $TRAIN_WSJ0/tiedlist > $WSJ0_DIR/TEMP/align.log';
+    system(shellstr);
+    
+    sfid = fopen('/home/harishan/databases/WSJ/TEMP/aligned_temp.mlf','r');
+    tfid = fopen('/home/harishan/databases/WSJ/TEMP/scores.txt','w');
+    line = fgets(sfid);
+    while(ischar(line))
+        if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+            line = fgets(sfid);
+        else
+            fprintf(tfid,'%s',line);
+            line = fgets(sfid);
+        end
+    end
+    fclose(sfid); fclose(tfid);
+    
+    [ph,lh] = textread('/home/harishan/databases/WSJ/TEMP/scores.txt','%s %f');
+    lhds(k) = sum(lh);
+end
+
+wfs_best = W(:,lhds == max(lhds));
+
+end
+
+function [f1,f2,f3] = get_formants(MicFile,winlen,winshft)
+
+Fs = 10000;
+winlen = winlen*1e-3;
+winshft = winshft*1e-3;
+wintype = 'Hamming'; numform = 4; lpctype = 0; preem = 0.97; lpcord = 12;
+
+tclfile = 'tclscript_formants_pitch.tcl';
+fmntfile = 'formants_snack.frm';
+fid = fopen(tclfile,'w');
+fprintf(fid,'#!/bin/sh\n');
+fprintf(fid,'# the next line restarts with wish \\\n');
+fprintf(fid,'exec wish8.4 "$0" "$@"\n\n');
+fprintf(fid,'package require snack\n\n');
+fprintf(fid,'snack::sound s\n\n');
+fprintf(fid,'s read %s\n\n',strrep(MicFile,'/','//'));
+fprintf(fid,'set fd [open %s w]\n',fmntfile);
+fprintf(fid,'puts $fd [join [s formant -windowlength %f -framelength %f -windowtype %s -numformants %d -lpctype %d -lpcorder %d -preemphasisfactor %f -ds_freq %d] \\n]\n',winlen,winshft,wintype,numform,lpctype,lpcord,preem,Fs);
+fprintf(fid,'close $fd\n\n');
+fprintf(fid,'exit');
+fclose(fid);
+if(system(['wish ' tclfile]) == 0)
+    [f1 f2 f3 f4 b1 b2 b3 b4] = textread(fmntfile,'%f %f %f %f %f %f %f %f');
+    system(['rm ' fmntfile]); 
+    system(['rm ' tclfile]); 
+else
+    error('An error has occured!\n');
+end
+
+end
+

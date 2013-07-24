@@ -1,0 +1,152 @@
+function CATS = find_best_pcwise_clwise(rawdata,Fs,TrWSJDir,TrCOMDir,DDir)
+% function [SFS,sfsVowOpt,sfsNonOpt] = find_best_pcwise_clwise(rawdata,Fs,TrWSJDir,TrCOMDir,DDir,sg1r,sg2r,f3r,sg1t,sg2t,f3t,sfsGlob)
+    
+%---first-pass transcription---%
+
+mfcfile = [DDir '/TEMP/temp.mfc'];
+mfccs = MFCC(rawdata,Fs);
+writehtk(mfcfile,mfccs,0.01,9);
+
+fid = fopen([DDir '/TEMP/temp.scp'],'w');
+fprintf(fid,'%s\n',mfcfile);
+fclose(fid);
+
+shellstr = ['HVite -A -T 1 -t 250.0 -C ' TrCOMDir '/configcross -H ' TrWSJDir '/hmm42/macros -H ' TrWSJDir '/hmm42/hmmdefs -S ' DDir '/TEMP/temp.scp -i ' DDir '/TEMP/temp_rec.mlf -w ' TrWSJDir '/wdnet_bigram -o ST -y lab -p -8.0 -s 15.0 ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/temp.log'];
+system(shellstr); % word-level transcription, required for forced alignment
+shellstr = ['HVite -A -T 1 -m -t 250.0 -C ' TrCOMDir '/configcross -H ' TrWSJDir '/hmm42/macros -H ' TrWSJDir '/hmm42/hmmdefs -S ' DDir '/TEMP/temp.scp -w ' TrWSJDir '/wdnet_bigram -o WS -y lab -p -8.0 -s 15.0 ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/temp2.log'];
+system(shellstr); % phone-level transcription, required for class-wise warping
+
+[sTimes,eTimes,tphones] = textread([DDir '/TEMP/temp.lab'],'%f %f %s');
+sFrames = sTimes/(10^5)+1;
+eFrames = eTimes/(10^5);
+mphones = get_mphones(tphones);
+% [backIDX,frontIDX,consIDX] = classify_backness(mphones);
+[vowIDX,nonIDX] = classify_vowels(mphones);
+
+CATS = zeros(length(mphones),3); % start frame, end frame, linear/pcwise
+CATS(:,1) = int16(sFrames);
+CATS(:,2) = int16(eFrames);
+SFS(vowIDX == 1,3) = sfsGlob(1);
+SFS(vowIDX == 1,4) = sfsGlob(2);
+SFS(vowIDX == 1,5) = sfsGlob(3);
+
+%---finding the best class-wise scale factors---%
+
+% a1 = 0.9:0.05:1.1;
+% a2 = 0.9:0.05:1.1;
+% a3 = 0.9:0.05:1.1;
+% A = allcomb(a1,a2,a3);
+% 
+% lhds = zeros(size(A,1),1);
+% SFS = zeros(length(mphones),5); % start frame, end frame, scale factors
+% SFS(:,1) = int16(sFrames);
+% SFS(:,2) = int16(eFrames);
+% SFS(vowIDX == 1,3) = sfsGlob(1);
+% SFS(vowIDX == 1,4) = sfsGlob(2);
+% SFS(vowIDX == 1,5) = sfsGlob(3);
+% for k = 1:size(A,1)
+%     SFS(nonIDX == 1,3) = A(k,1);
+%     SFS(nonIDX == 1,4) = A(k,2);
+%     SFS(nonIDX == 1,5) = A(k,3);
+%     mfccs = MFCC_pcwise_clwise(rawdata,Fs,sg1r,sg2r,f3r,sg1t,sg2t,f3t,SFS(SFS(:,2) > SFS(:,1),:));
+%     writehtk(mfcfile,mfccs,0.01,9);
+%     shellstr = ['HVite -C ' TrCOMDir '/configcross -a -m -o WT -I ' DDir '/TEMP/temp_rec.mlf -H ' TrWSJDir '/hmm42/macros -H ' TrWSJDir '/hmm42/hmmdefs -S ' DDir '/TEMP/temp.scp -i ' DDir '/TEMP/aligned_temp.mlf ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/align.log'];
+%     system(shellstr);
+%     lhds(k) = get_lhd(DDir);
+% end
+% [~,maxidx] = max(lhds);
+% sfsNonOpt = A(maxidx,:);
+% 
+% lhds = zeros(size(A,1),1);
+% SFS(nonIDX == 1,3) = sfsNonOpt(1);
+% SFS(nonIDX == 1,4) = sfsNonOpt(2);
+% SFS(nonIDX == 1,5) = sfsNonOpt(3);
+% for k = 1:size(A,1)
+%     SFS(vowIDX == 1,3) = A(k,1);
+%     SFS(vowIDX == 1,4) = A(k,2);
+%     SFS(vowIDX == 1,5) = A(k,3);
+%     mfccs = MFCC_pcwise_clwise(rawdata,Fs,sg1r,sg2r,f3r,sg1t,sg2t,f3t,SFS(SFS(:,2) > SFS(:,1),:));
+%     writehtk(mfcfile,mfccs,0.01,9);
+%     shellstr = ['HVite -C ' TrCOMDir '/configcross -a -m -o WT -I ' DDir '/TEMP/temp_rec.mlf -H ' TrWSJDir '/hmm42/macros -H ' TrWSJDir '/hmm42/hmmdefs -S ' DDir '/TEMP/temp.scp -i ' DDir '/TEMP/aligned_temp.mlf ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/align.log'];
+%     system(shellstr);
+%     lhds(k) = get_lhd(DDir);
+% end
+% [~,maxidx] = max(lhds);
+% sfsVowOpt = A(maxidx,:);
+% 
+% SFS(vowIDX == 1,3) = sfsVowOpt(1);
+% SFS(vowIDX == 1,4) = sfsVowOpt(2);
+% SFS(vowIDX == 1,5) = sfsVowOpt(3);
+% SFS = SFS(SFS(:,2) > SFS(:,1),:);
+
+end
+
+function mphones = get_mphones(tphones)
+
+mphones = cell(length(tphones),1);
+for k = 1:length(tphones)
+    if(isempty(find(tphones{k} == '-',1)) && isempty(find(tphones{k} == '+',1)))
+        mphones{k} = tphones{k};
+    elseif(isempty(find(tphones{k} == '-',1)) && ~isempty(find(tphones{k} == '+',1)))
+        mphones{k} = tphones{k}(1:find(tphones{k} == '+',1)-1);
+    elseif(~isempty(find(tphones{k} == '-',1)) && isempty(find(tphones{k} == '+',1)))
+        mphones{k} = tphones{k}(find(tphones{k} == '-',1)+1:end);
+    else
+        mphones{k} = tphones{k}(find(tphones{k} == '-',1)+1:find(tphones{k} == '+',1)-1);
+    end
+end
+
+end
+
+% function [backIDX,frontIDX,consIDX] = classify_backness(mphones)
+% 
+% backIDX = zeros(length(mphones),1);
+% frontIDX = zeros(length(mphones),1);
+% consIDX = zeros(length(mphones),1);
+% for k = 1:length(mphones)
+%     switch mphones{k}
+%         case {'aa','ah','ao','er','r','ow','uh','uw','w','l','aw'}
+%             backIDX(k) = 1;
+%         case {'ae','eh','ih','iy','y','ey','ay','oy'}
+%             frontIDX(k) = 1;
+%         otherwise
+%             consIDX(k) = 1;
+%     end
+% end
+% 
+% end
+
+function [vowIDX,nonIDX] = classify_vowels(mphones)
+
+vowIDX = zeros(length(mphones),1);
+nonIDX = zeros(length(mphones),1);
+for k = 1:length(mphones)
+    switch mphones{k}
+        case {'aa','ah','ao','er','r','ow','uh','uw','w','l','aw','ae','eh','ih','iy','y','ey','ay','oy'}
+            vowIDX(k) = 1;
+        otherwise
+            nonIDX(k) = 1;
+    end
+end
+
+end
+
+% function LHD = get_lhd(DDir)
+% 
+% sfid = fopen([DDir '/TEMP/aligned_temp.mlf'],'r');
+% tfid = fopen([DDir '/TEMP/scores.txt'],'w');
+% line = fgets(sfid);
+% while(ischar(line))
+%     if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+%         line = fgets(sfid);
+%     else
+%         fprintf(tfid,'%s',line);
+%         line = fgets(sfid);
+%     end
+% end
+% fclose(sfid); fclose(tfid);
+% 
+% [~,lh] = textread([DDir '/TEMP/scores.txt'],'%s %f');
+% LHD = sum(lh);
+% 
+% end

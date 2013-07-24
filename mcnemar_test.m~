@@ -1,0 +1,27 @@
+function [N1,N2] = mcnemar_test()
+
+recFile1 = '../wsj0/vtln_test_filebyfile.txt';
+recFile2 = '../wsj0/sg1sg2sg3_test_filebyfile.txt';
+
+N1 = count_errors(recFile1);
+N2 = count_errors(recFile2);
+
+end
+
+function N = count_errors(filename)
+
+fid = fopen(filename,'r');
+N = [];
+line = fgets(fid);
+while(ischar(line))
+    subStr = line(find(line == '['):end);
+    commas = find(subStr == ',');
+    nD = str2num(subStr(commas(1)+4:commas(2)-1));
+    nS = str2num(subStr(commas(2)+4:commas(3)-1));
+    nI = str2num(subStr(commas(3)+4:commas(4)-1));
+    N = [N;(7*nD + 2*nS + nI)];
+    line = fgets(fid);
+end
+fclose(fid);
+
+end

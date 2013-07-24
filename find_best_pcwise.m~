@@ -1,0 +1,149 @@
+function SFS = find_best_pcwise(rawdata,Fs,TrWSJDir,TrCOMDir,DDir,sg1r,sg2r,f3r,sg1t,sg2t,f3t)
+
+%---first-pass transcription---%
+
+mfcfile = [DDir '/TEMP/temp.mfc'];
+mfccs = MFCC(rawdata,Fs);
+writehtk(mfcfile,mfccs,0.01,9);
+
+fid = fopen([DDir '/TEMP/temp.scp'],'w');
+fprintf(fid,'%s\n',mfcfile);
+fclose(fid);
+
+shellstr = ['HVite -A -T 1 -t 250.0 -C ' TrCOMDir '/configcross -H ' TrWSJDir '/hmm42/macros -H ' TrWSJDir '/hmm42/hmmdefs -S ' DDir '/TEMP/temp.scp -i ' DDir '/TEMP/temp_rec.mlf -w ' TrWSJDir '/wdnet_bigram -o ST -y lab -p -8.0 -s 15.0 ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/temp.log'];
+system(shellstr); % word-level transcription, required for forced alignment
+
+%---finding the best piece-wise warping---%
+
+a1 = 0.9:0.05:1.1;
+a2 = 0.9:0.05:1.1;
+a3 = 0.9:0.05:1.1;
+A = allcomb(a1,a2,a3);
+
+lhds = zeros(size(A,1),1);
+for k = 1:size(A,1)
+    mfccs = MFCC_pcwise(rawdata,Fs,sg1r,sg2r,f3r,sg1t*A(k,1),sg2t*A(k,2),f3t*A(k,3));
+    writehtk(mfcfile,mfccs,0.01,9);
+    shellstr = ['HVite -C ' TrCOMDir '/configcross -a -m -o WT -I ' DDir '/TEMP/temp_rec.mlf -H ' TrWSJDir '/hmm42/macros -H ' TrWSJDir '/hmm42/hmmdefs -S ' DDir '/TEMP/temp.scp -i ' DDir '/TEMP/aligned_temp.mlf ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/TEMP/align.log'];
+    system(shellstr);
+    
+    sfid = fopen([DDir '/TEMP/aligned_temp.mlf'],'r');
+    tfid = fopen([DDir '/TEMP/scores.txt'],'w');
+    line = fgets(sfid);
+    while(ischar(line))
+        if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+            line = fgets(sfid);
+        else
+            fprintf(tfid,'%s',line);
+            line = fgets(sfid);
+        end
+    end
+    fclose(sfid); fclose(tfid);
+    
+    [~,lh] = textread([DDir '/TEMP/scores.txt'],'%s %f');
+    lhds(k) = sum(lh);    
+end
+
+sfs = A(lhds == max(lhds),:);
+if(flags(1) == 1)
+    [~,maxidx] = max(lhdsLB);
+    sfsLB = A(maxidx,:);
+else
+    sfsLB = [1 1 1];
+end
+if(flags(2) == 1)
+    [~,maxidx] = max(lhdsLF);
+    sfsLF = A(maxidx,:);
+else
+    sfsLF = [1 1 1];
+end
+if(flags(3) == 1)
+    [~,maxidx] = max(lhdsHB);
+    sfsHB = A(maxidx,:);
+else
+    sfsHB = [1 1 1];
+end
+if(flags(4) == 1)
+    [~,maxidx] = max(lhdsHF);
+    sfsHF = A(maxidx,:);
+else
+    sfsHF = [1 1 1];
+end
+if(flags(5) == 1)
+    [~,maxidx] = max(lhdsCON);
+    sfsCON = A(maxidx,:);
+else
+    sfsCON = [1 1 1];
+end
+
+SFS = zeros(length(mphones) + numDiph,5); % start frame, end frame, scale factors
+count = 1;
+for k = 1:length(mphones)
+    if(strcmp(classLabels{k,1},classLabels{k,2}))
+        SFS(count,1) = sFrames(k); SFS(count,2) = eFrames(k);
+        switch classLabels{k,1}
+            case {'LB','LF','HB','HF','CON'}
+                SFS(count,3:5) = eval(['sfs' classLabels{k,1}]);
+            otherwise
+                SFS(count,3:5) = NaN; % for silence and sp frames
+        end
+        count = count + 1;
+    else
+        SFS(count,1) = sFrames(k); SFS(count,2) = round(mean([sFrames(k) eFrames(k)]));
+        SFS(count + 1,1) = round(mean([sFrames(k) eFrames(k)])) + 1; SFS(count + 1,2) = eFrames(k);
+        SFS(count,3:5) = eval(['sfs' classLabels{k,1}]);
+        SFS(count + 1,3:5) = eval(['sfs' classLabels{k,2}]);
+        count = count + 2;
+    end
+end
+SFS(:,[1 2]) = int16(SFS(:,[1 2]));
+SFS = SFS(SFS(:,2) > SFS(:,1),:);
+
+end
+
+function mphones = get_mphones(tphones)
+
+mphones = cell(length(tphones),1);
+for k = 1:length(tphones)
+    if(isempty(find(tphones{k} == '-',1)) && isempty(find(tphones{k} == '+',1)))
+        mphones{k} = tphones{k};
+    elseif(isempty(find(tphones{k} == '-',1)) && ~isempty(find(tphones{k} == '+',1)))
+        mphones{k} = tphones{k}(1:find(tphones{k} == '+',1)-1);
+    elseif(~isempty(find(tphones{k} == '-',1)) && isempty(find(tphones{k} == '+',1)))
+        mphones{k} = tphones{k}(find(tphones{k} == '-',1)+1:end);
+    else
+        mphones{k} = tphones{k}(find(tphones{k} == '-',1)+1:find(tphones{k} == '+',1)-1);
+    end
+end
+
+end
+
+function classLabels = check_class(mphones)
+
+classLabels = cell(length(mphones),2); % beginning and end
+for k = 1:length(mphones)
+    switch mphones{k}
+        case {'aa','ah','ao','er','r'}
+            classLabels{k,1} = 'LB'; classLabels{k,2} = 'LB';
+        case {'ae','eh'}
+            classLabels{k,1} = 'LF'; classLabels{k,2} = 'LF';
+        case {'ow','uh','uw','w','l'}
+            classLabels{k,1} = 'HB'; classLabels{k,2} = 'HB';
+        case {'ih','iy','y'}
+            classLabels{k,1} = 'HF'; classLabels{k,2} = 'HF';
+        case 'aw'
+            classLabels{k,1} = 'LF'; classLabels{k,2} = 'HB';
+        case 'ay'
+            classLabels{k,1} = 'LB'; classLabels{k,2} = 'HF';
+        case 'ey'
+            classLabels{k,1} = 'HF'; classLabels{k,2} = 'HF';
+        case 'oy'
+            classLabels{k,1} = 'HB'; classLabels{k,2} = 'HF';
+        case {'sil','sp'}
+            classLabels{k,1} = 'SIL'; classLabels{k,2} = 'SIL';
+        otherwise
+            classLabels{k,1} = 'CON'; classLabels{k,2} = 'CON';
+    end
+end
+
+end

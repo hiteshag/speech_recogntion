@@ -1,0 +1,73 @@
+function breg = find_best_regsgr(srcfile,sg1ref,sg2ref,sg3ref,sg1te,sg2te,sg3te,beta)
+
+%---first-pass transcription---%
+
+mfcfile = '/home/harishan/databases/WSJ/TEMP/temp.mfc';
+[rawdata,Fs] = wavread(srcfile);
+mfccs = MFCC(rawdata,Fs);
+writehtk(mfcfile,mfccs,0.01,9);
+
+fid = fopen('/home/harishan/databases/WSJ/TEMP/temp.scp','w');
+fprintf(fid,'%s\n',mfcfile);
+fclose(fid);
+
+shellstr = 'HVite -A -T 1 -t 250.0 -C $TRAIN_COMMON/configcross -H $TRAIN_WSJ0/hmm42/macros -H $TRAIN_WSJ0/hmm42/hmmdefs -S $WSJ0_DIR/TEMP/temp.scp -i $WSJ0_DIR/TEMP/temp_rec.mlf -w $TRAIN_WSJ0/wdnet_bigram -o ST -y lab -p -8.0 -s 15.0 $TRAIN_WSJ0/dict_5k $TRAIN_WSJ0/tiedlist > $WSJ0_DIR/TEMP/temp.log';
+system(shellstr);
+
+%---find the best regression warping---%
+
+Bs = zeros(2,125);
+y = [sg1ref;sg2ref;sg3ref];
+k = 1;
+for a1 = [0.9 0.95 1 1.05 1.1]
+    for a2 = [0.9 0.95 1 1.05 1.1]
+        for a3 = [00.95 1 1.05]
+            x = [a1;a2;a3].*[sg1te;sg2te;sg3te];
+            eqn = regress(y,[x ones(3,1)]);
+            Bs(:,k) = eqn;
+            k = k+1;
+        end
+    end
+end
+
+% Bs = zeros(2,75);
+% y = [sg1ref;sg2ref;sg3ref];
+% k = 1;
+% for a1 = [0.9 0.95 1 1.05 1.1]
+%     for a2 = [0.9 0.95 1 1.05 1.1]
+%         for a3 = [0.95 1 1.05]            
+%             x = [a1;a2;a3].*[sg1te;sg2te;sg3te];
+%             eqn = regress(y,[x ones(3,1)]);
+%             Bs(:,k) = eqn;
+%             k = k+1;           
+%         end
+%     end
+% end
+
+lhds = zeros(size(Bs,2),1);
+for k = 1:length(lhds)
+    mfccs = MFCC_regsgrwarp(rawdata,Fs,Bs(:,k),beta);
+    writehtk(mfcfile,mfccs,0.01,9);
+    shellstr = 'HVite -C $TRAIN_COMMON/configcross -a -m -o WT -I $WSJ0_DIR/TEMP/temp_rec.mlf -H $TRAIN_WSJ0/hmm42/macros -H $TRAIN_WSJ0/hmm42/hmmdefs -S $WSJ0_DIR/TEMP/temp.scp -i $WSJ0_DIR/TEMP/aligned_temp.mlf $TRAIN_WSJ0/dict_5k $TRAIN_WSJ0/tiedlist > $WSJ0_DIR/TEMP/align.log';
+    system(shellstr);
+    
+    sfid = fopen('/home/harishan/databases/WSJ/TEMP/aligned_temp.mlf','r');
+    tfid = fopen('/home/harishan/databases/WSJ/TEMP/scores.txt','w');
+    line = fgets(sfid);
+    while(ischar(line))
+        if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+            line = fgets(sfid);
+        else
+            fprintf(tfid,'%s',line);
+            line = fgets(sfid);
+        end
+    end
+    fclose(sfid); fclose(tfid);
+    
+    [ph,lh] = textread('/home/harishan/databases/WSJ/TEMP/scores.txt','%s %f');
+    lhds(k) = sum(lh);
+end
+
+breg = Bs(:,lhds == max(lhds));
+
+end

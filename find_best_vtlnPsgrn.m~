@@ -1,0 +1,84 @@
+function sfs = find_best_vtlnPsgrn(rawdata,Fs,TrWSJDir,TrCOMDir,DDir,sg1r,sg2r,f3r,sg1t,sg2t,f3t,alpha,Fc,mode,tempdir)
+
+%% ---first-pass transcription--- %%
+
+mfcfile = [DDir '/' tempdir '/temp.mfc'];
+mfccs = MFCC_fblinwarp(rawdata,Fs,1,Fc,0);
+writehtk(mfcfile,mfccs,0.01,9);
+
+fid = fopen([DDir '/' tempdir '/temp.scp'],'w');
+fprintf(fid,'%s\n',mfcfile);
+fclose(fid);
+
+shellstr = ['HVite -A -T 1 -t 250.0 -C ' TrCOMDir '/configcross -H ' TrWSJDir '/hmm42_' mode '/macros -H ' TrWSJDir '/hmm42_' mode '/hmmdefs -S ' DDir '/' tempdir '/temp.scp -i ' DDir '/' tempdir '/temp_rec.mlf -w ' TrWSJDir '/wdnet_bigram -o ST -y lab -p -8.0 -s 15.0 ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/' tempdir '/temp.log'];
+system(shellstr);
+
+%% ---finding the best alpha--- %%
+
+% wfs = (0.8:0.02:1.2)';
+% lhds = zeros(length(wfs),1);
+% for k = 1:length(wfs)
+%     mfccs = MFCC_fbTboth(rawdata,Fs,sg1r,sg2r,f3r,sg1t,sg2t,f3t,wfs(k),Fc,0);
+%     writehtk(mfcfile,mfccs,0.01,9);
+%     shellstr = ['HVite -C ' TrCOMDir '/configcross -a -m -o WT -I ' DDir '/' tempdir '/temp_rec.mlf -H ' TrWSJDir '/hmm42_' mode '/macros -H ' TrWSJDir '/hmm42_' mode '/hmmdefs -S ' DDir '/' tempdir '/temp.scp -i ' DDir '/' tempdir '/aligned_temp.mlf ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/' tempdir '/align.log'];
+%     system(shellstr);
+%     
+%     sfid = fopen([DDir '/' tempdir '/aligned_temp.mlf'],'r');
+%     tfid = fopen([DDir '/' tempdir '/scores.txt'],'w');
+%     line = fgets(sfid);
+%     while(ischar(line))
+%         if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+%             line = fgets(sfid);
+%         else
+%             fprintf(tfid,'%s',line);
+%             line = fgets(sfid);
+%         end
+%     end
+%     fclose(sfid); fclose(tfid);
+%     
+%     [~,lh] = textread([DDir '/' tempdir '/scores.txt'],'%s %f');
+%     lhds(k) = sum(lh);
+% end
+% 
+% alpha_best = wfs(lhds == max(lhds));
+
+%% ---finding the best piece-wise warping--- %%
+
+a1 = 0.95:0.05:1.05;
+a2 = 0.95:0.05:1.05;
+a3 = 0.95:0.05:1.05;
+
+% a1 = 0.9:0.05:1.1;
+% a2 = 0.9:0.05:1.1;
+% a3 = 0.9:0.05:1.1;
+
+A = allcomb(a1,a2,a3);
+
+lhds = zeros(size(A,1),1);
+for k = 1:size(A,1)
+    mfccs = MFCC_fbTboth(rawdata,Fs,sg1r,sg2r,f3r,sg1t*A(k,1),sg2t*A(k,2),f3t*A(k,3),alpha,Fc,0);
+    writehtk(mfcfile,mfccs,0.01,9);
+    shellstr = ['HVite -C ' TrCOMDir '/configcross -a -m -o WT -I ' DDir '/' tempdir '/temp_rec.mlf -H ' TrWSJDir '/hmm42_' mode '/macros -H ' TrWSJDir '/hmm42_' mode '/hmmdefs -S ' DDir '/' tempdir '/temp.scp -i ' DDir '/' tempdir '/aligned_temp.mlf ' TrWSJDir '/dict_5k ' TrWSJDir '/tiedlist > ' DDir '/' tempdir '/align.log'];
+    system(shellstr);
+    
+    sfid = fopen([DDir '/' tempdir '/aligned_temp.mlf'],'r');
+    tfid = fopen([DDir '/' tempdir '/scores.txt'],'w');
+    line = fgets(sfid);
+    while(ischar(line))
+        if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+            line = fgets(sfid);
+        else
+            fprintf(tfid,'%s',line);
+            line = fgets(sfid);
+        end
+    end
+    fclose(sfid); fclose(tfid);
+    
+    [~,lh] = textread([DDir '/' tempdir '/scores.txt'],'%s %f');
+    lhds(k) = sum(lh);    
+end
+
+[~,maxidx] = max(lhds);
+sfs = A(maxidx,:);
+
+end

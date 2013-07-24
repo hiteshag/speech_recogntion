@@ -1,0 +1,103 @@
+% extracting features for testing data based on SGRs
+% normalization is completely unsupervised
+
+clear all;
+beta = 0.8; % bandwidth preservation factor
+
+%% estimating SGR frequencies from training utterances
+
+% ListName = '/home/harishan/databases/WSJ/train.scp'; % list of mfc files used for training
+% List = textread(ListName,'%s');
+% fid = fopen('/home/harishan/databases/WSJ/sgrs_train.txt','w');
+% name = cell(1);
+% for k = 1:length(List)
+%     name{1} = ['/home/harishan/databases/WSJ/' List{k}(3:end-3) 'wav1']; % .wav file name
+%     [sg1,sg2,sg3] = estimate_SGRs(name);
+%     fprintf(fid,'%s %f %f %f\n',name{1},sg1,sg2,sg3);
+% end
+% fclose(fid);
+
+%% estimating medians of formants for the training speakers
+
+% List = textread('/home/harishan/databases/WSJ/train.scp','%s');
+% fid = fopen('/home/harishan/databases/WSJ/formant_medians_train.txt','w');
+% id = List{1}(11:13);
+% sublist = cell({});
+% cnt = 1;
+% for k = 1:length(List)
+%     if(strcmp(List{k}(11:13),id))
+%         sublist{cnt} = ['/home/harishan/databases/WSJ/' List{k}(3:end-3) 'wav1'];
+%         cnt = cnt+1;
+%     else
+%         [medf1,medf2,medf3] = get_median_formants(sublist);
+%         fprintf(fid,'%s %f %f %f\n',id,medf1,medf2,medf3);
+%         id = List{k}(11:13);
+%         sublist = cell({});
+%         cnt = 1;
+%         sublist{cnt} = ['/home/harishan/databases/WSJ/' List{k}(3:end-3) 'wav1'];
+%         cnt = cnt+1;
+%     end
+% end
+% fclose(fid);
+
+%% SGR-based frequency warping for speaker-wise normalized feature extraction
+% one utterance per speaker (enrollment data) for warp factor estimation
+
+[TrainList,sg1tr,sg2tr,sg3tr] = textread('/home/harishan/databases/WSJ/sgrs_train.txt','%s %f %f %f');
+sg1ref = mean(sg1tr); sg2ref = mean(sg2tr); sg3ref = mean(sg3tr);
+
+[TrainID,f1tr,f2tr,f3tr] = textread('/home/harishan/databases/WSJ/formant_medians_train.txt','%s %f %f %f');
+f1ref = mean(f1tr); f2ref = mean(f2tr); f3ref = mean(f3tr);
+
+%ID = ['440';'441';'442';'443';'444';'445';'446';'447'];
+
+% AlphaFile = '/home/harishan/databases/WSJ/sg2_warp_factors1.txt';
+% fid = fopen(AlphaFile,'w');
+
+% RegSgrFile = '/home/harishan/databases/WSJ/regsgrs1.txt';
+% fid = fopen(RegSgrFile,'w');
+
+% fid = fopen('/home/harishan/databases/WSJ/regsg1sg2f31.txt','w');
+
+fid = fopen('/home/harishan/databases/WSJ/bw_plus_vtln_warp_factors1.txt','w');
+
+winlen = 25; winshft = 10; % same as MFCC extraction
+
+enfile = cell(1);
+for k = 1:size(ID,1)
+    [WavList,MfcList] = textread(['/home/harishan/databases/WSJ/nov92_wav1_mfc_330_' ID(k,:) '.scp'],'%s %s');
+    enfile{1} = WavList{1}; % arbitrary
+    [sg1te,sg2te,sg3te] = estimate_SGRs(enfile);
+    [f1te,f2te,f3te] = get_median_formants(enfile);
+    %breg = find_best_regsgr(enfile{1},sg1ref,sg2ref,f3ref,sg1te,sg2te,f3te,beta);
+    %breg = find_best_regsgr(enfile{1},sg1ref,sg2ref,sg3ref,sg1te,sg2te,sg3te,beta);
+    %alpha = sg2ref/sg2te;
+    wfs_best = find_best_bw_plus_vtln(enfile{1},sg1ref,sg2ref,f3ref,sg1te,sg2te,f3te,beta);
+    
+    for j = 1:length(WavList)
+        srcfile = WavList{j};
+        tgtfile = MfcList{j};
+        [rawdata,Fs] = wavread(srcfile);
+        %mfccs = MFCC_regsgrwarp(rawdata,Fs,breg,beta);
+        %mfccs = MFCC_linwarp(rawdata,Fs,alpha,beta);
+        if(length(wfs_best) == 1)
+            mfccs = MFCC_linwarp(rawdata,Fs,wfs_best,beta);
+        else
+            [F1,F2,F3] = get_formants(srcfile,winlen,winshft);
+            mfccs = MFCC_bwlinwarp(rawdata,Fs,F1,F2,F3,wfs_best(1),wfs_best(2),wfs_best(3),beta);
+        end
+        writehtk(tgtfile,mfccs,0.01,9);
+    end
+    %fprintf(fid,'%s %f %f\n',ID(k,:),sg2te,alpha);
+    %fprintf(fid,'%s %f %f\n',ID(k,:),breg(1),breg(2));
+    if(length(wfs_best) == 1)
+        fprintf(fid,'%s %f\n',ID(k,:),wfs_best);
+    else
+        fprintf(fid,'%s %f %f %f %f %f %f\n',ID(k,:),sg1te,sg2te,f3te,wfs_best(1),wfs_best(2),wfs_best(3));
+    end
+    
+    fprintf('Features extracted for speaker %s\n',ID(k,:));
+end
+
+fclose(fid);
+

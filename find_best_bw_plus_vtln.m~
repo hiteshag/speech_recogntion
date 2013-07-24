@@ -1,0 +1,108 @@
+function [wfs_best] = find_best_bw_plus_vtln(srcfile,sg1ref,sg2ref,f3ref,sg1te,sg2te,f3te,beta)
+
+%---first-pass transcription---%
+
+mfcfile = '/home/harishan/databases/WSJ/TEMP/temp.mfc';
+[rawdata,Fs] = wavread(srcfile);
+mfccs = MFCC(rawdata,Fs);
+writehtk(mfcfile,mfccs,0.01,9);
+
+fid = fopen('/home/harishan/databases/WSJ/TEMP/temp.scp','w');
+fprintf(fid,'%s\n',mfcfile);
+fclose(fid);
+
+shellstr = 'HVite -A -T 1 -t 250.0 -C $TRAIN_COMMON/configcross -H $TRAIN_WSJ0/hmm42/macros -H $TRAIN_WSJ0/hmm42/hmmdefs -S $WSJ0_DIR/TEMP/temp.scp -i $WSJ0_DIR/TEMP/temp_rec.mlf -w $TRAIN_WSJ0/wdnet_bigram -o ST -y lab -p -8.0 -s 15.0 $TRAIN_WSJ0/dict_5k $TRAIN_WSJ0/tiedlist > $WSJ0_DIR/TEMP/temp.log';
+system(shellstr);
+
+%---find the best VTLN alpha---%
+
+wfs_vtln = (0.8:0.02:1.2)';
+lhds_vtln = zeros(length(wfs_vtln),1);
+for k = 1:length(wfs_vtln)
+    mfccs = MFCC_linwarp(rawdata,Fs,wfs_vtln(k),beta);
+    writehtk(mfcfile,mfccs,0.01,9);
+    shellstr = 'HVite -C $TRAIN_COMMON/configcross -a -m -o WT -I $WSJ0_DIR/TEMP/temp_rec.mlf -H $TRAIN_WSJ0/hmm42/macros -H $TRAIN_WSJ0/hmm42/hmmdefs -S $WSJ0_DIR/TEMP/temp.scp -i $WSJ0_DIR/TEMP/aligned_temp.mlf $TRAIN_WSJ0/dict_5k $TRAIN_WSJ0/tiedlist > $WSJ0_DIR/TEMP/align.log';
+    system(shellstr);
+    
+    sfid = fopen('/home/harishan/databases/WSJ/TEMP/aligned_temp.mlf','r');
+    tfid = fopen('/home/harishan/databases/WSJ/TEMP/scores.txt','w');
+    line = fgets(sfid);
+    while(ischar(line))
+        if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+            line = fgets(sfid);
+        else
+            fprintf(tfid,'%s',line);
+            line = fgets(sfid);
+        end
+    end
+    fclose(sfid); fclose(tfid);
+    
+    [ph,lh] = textread('/home/harishan/databases/WSJ/TEMP/scores.txt','%s %f');
+    lhds_vtln(k) = sum(lh);
+end
+
+alpha_vtln = wfs_vtln(lhds_vtln == max(lhds_vtln));
+
+alpha_f3 = f3ref/f3te; % warp factor based on F3
+
+%---find the best set of warp factors---%
+
+k = 1;
+for a1 = [0.85 0.875 0.9 0.925 0.95 0.975 1 1.025 1.05 1.075 1.1 1.125 1.15]
+    for a2 = [0.85 0.875 0.9 0.925 0.95 0.975 1 1.025 1.05 1.075 1.1 1.125 1.15]
+        B(1,k) = sg1ref/(a1*sg1te);
+        B(2,k) = sg2ref/(a2*sg2te);
+        k = k+1;
+    end
+end
+W1 = [B;alpha_vtln*ones(1,size(B,2))];
+W2 = [B;alpha_f3*ones(1,size(B,2))];
+W = [W1 W2];
+ 
+cls = zeros(1,size(W,2)); % direction constraint
+for k = 1:size(W,2)
+    cnd1 = W(1,k) < 1 && W(2,k) < 1 && W(3,k) < 1;
+    cnd2 = W(1,k) > 1 && W(2,k) > 1 && W(3,k) > 1;
+    cnd3 = W(1,k) > 1 && W(2,k) > 1 && W(3,k) == 1;
+    if((W(1,k) < 1 && W(2,k) < 1 && W(3,k) < 1) || (W(1,k) > 1 && W(2,k) > 1 && W(3,k) > 1))
+       cls(k) = 1;
+    end
+end
+W = W(:,cls == 1);
+
+winlen = 25; winshft = 10; % same as MFCC feature extraction
+[F1,F2,F3] = get_formants(srcfile,winlen,winshft);
+
+lhds_bw = zeros(size(W,2),1);
+for k = 1:length(lhds_bw)
+    mfccs = MFCC_bwlinwarp(rawdata,Fs,F1,F2,F3,W(1,k),W(2,k),W(3,k),beta);
+    writehtk(mfcfile,mfccs,0.01,9);
+    shellstr = 'HVite -C $TRAIN_COMMON/configcross -a -m -o WT -I $WSJ0_DIR/TEMP/temp_rec.mlf -H $TRAIN_WSJ0/hmm42/macros -H $TRAIN_WSJ0/hmm42/hmmdefs -S $WSJ0_DIR/TEMP/temp.scp -i $WSJ0_DIR/TEMP/aligned_temp.mlf $TRAIN_WSJ0/dict_5k $TRAIN_WSJ0/tiedlist > $WSJ0_DIR/TEMP/align.log';
+    system(shellstr);
+    
+    sfid = fopen('/home/harishan/databases/WSJ/TEMP/aligned_temp.mlf','r');
+    tfid = fopen('/home/harishan/databases/WSJ/TEMP/scores.txt','w');
+    line = fgets(sfid);
+    while(ischar(line))
+        if(strcmp(line(1:2),'#!') || strcmp(line(1:2),'"/') || strcmp(line(1),'.'))
+            line = fgets(sfid);
+        else
+            fprintf(tfid,'%s',line);
+            line = fgets(sfid);
+        end
+    end
+    fclose(sfid); fclose(tfid);
+    
+    [ph,lh] = textread('/home/harishan/databases/WSJ/TEMP/scores.txt','%s %f');
+    lhds_bw(k) = sum(lh);
+end
+
+wfs_bw = W(:,lhds_bw == max(lhds_bw));
+
+if(max(lhds_vtln) > max(lhds_bw))
+    wfs_best = alpha_vtln;
+else
+    wfs_best = wfs_bw;
+end
+
+end

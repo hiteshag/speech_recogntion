@@ -1,0 +1,34 @@
+% extracting features for testing data using VTLN
+
+% search range for alpha: [0.8,1.2] in steps of 0.02 (21 warp factors)
+% warp factor estimation is unsupervised
+
+clear all;
+
+beta = 0.9; % bandwidth preservation factor
+
+%% speaker-wise normalized feature extraction
+% one utterance per speaker (enrollment data) for warp factor estimation
+
+ID = ['440';'441';'442';'443';'444';'445';'446';'447'];
+
+AlphaFile = '/home/harishan/databases/WSJ/vtln_warp_factors1.txt';
+fid = fopen(AlphaFile,'w');
+
+for k = 1:length(ID)
+    [WavList,MfcList] = textread(['/home/harishan/databases/WSJ/nov92_wav1_mfc_330_' ID(k,:) '.scp'],'%s %s');
+    enfile = WavList{1};
+    alpha_best = find_best_vtln(enfile,1,beta); % warp factor for 1st pass = 1
+    
+    for j = 1:length(WavList)
+        srcfile = WavList{j};
+        tgtfile = MfcList{j};
+        [rawdata,Fs] = wavread(srcfile);
+        mfccs = MFCC_linwarp(rawdata,Fs,alpha_best,beta);
+        writehtk(tgtfile,mfccs,0.01,9);
+    end
+    fprintf(fid,'%s %f\n',ID(k,:),alpha_best);
+end
+
+fclose(fid);
+
